@@ -1,0 +1,231 @@
+#!/bin/bash
+
+# Exit on any failure
+set -e
+
+# Output helper
+indent() {
+  sed -u 's/^/       /'
+}
+
+echo "-----> Installing ImageMagick with Fonts Support"
+
+BUILD_DIR=$1
+CACHE_DIR=$2
+ENV_DIR=$3
+VENDOR_DIR="$BUILD_DIR/vendor"
+INSTALL_DIR="$VENDOR_DIR/imagemagick"
+
+# Use latest stable ImageMagick version (as of 2025)
+IMAGE_MAGICK_VERSION="${IMAGE_MAGICK_VERSION:-7.1.1-36}"
+CACHE_FILE="$CACHE_DIR/imagemagick-fonts-$IMAGE_MAGICK_VERSION.tar.gz"
+
+# Font packages to download
+DEJAVU_FONTS_VERSION="2.37"
+DEJAVU_FONTS_URL="https://downloads.sourceforge.net/dejavu/dejavu-fonts-ttf-$DEJAVU_FONTS_VERSION.tar.bz2"
+DEJAVU_FONTS_FILE="dejavu-fonts-ttf-$DEJAVU_FONTS_VERSION.tar.bz2"
+DEJAVU_FONTS_DIR="dejavu-fonts-ttf-$DEJAVU_FONTS_VERSION"
+
+if [ ! -f $CACHE_FILE ]; then
+  echo "-----> Installing ImageMagick $IMAGE_MAGICK_VERSION from source"
+  
+  # Create directories
+  mkdir -p $INSTALL_DIR
+  mkdir -p $CACHE_DIR
+
+  # Download ImageMagick
+  IMAGE_MAGICK_FILE="ImageMagick-$IMAGE_MAGICK_VERSION.tar.xz"
+  IMAGE_MAGICK_DIR="ImageMagick-$IMAGE_MAGICK_VERSION"
+  IMAGE_MAGICK_URL="https://github.com/ImageMagick/ImageMagick/archive/refs/tags/$IMAGE_MAGICK_VERSION.tar.gz"
+
+  echo "-----> Downloading ImageMagick from $IMAGE_MAGICK_URL"
+  curl -L $IMAGE_MAGICK_URL -o $BUILD_DIR/$IMAGE_MAGICK_VERSION.tar.gz | indent
+
+  if [ ! -f $BUILD_DIR/$IMAGE_MAGICK_VERSION.tar.gz ]; then
+    echo "Error: Unable to download ImageMagick" | indent
+    exit 1;
+  fi
+
+  echo "-----> Extracting ImageMagick"
+  cd $BUILD_DIR
+  tar xzf $IMAGE_MAGICK_VERSION.tar.gz | indent
+  cd ImageMagick-$IMAGE_MAGICK_VERSION
+
+  echo "-----> Configuring ImageMagick build"
+  # Configure with optimizations for Heroku
+  export CPPFLAGS="-I$INSTALL_DIR/include"
+  export LDFLAGS="-L$INSTALL_DIR/lib"
+  export PKG_CONFIG_PATH="$INSTALL_DIR/lib/pkgconfig:$PKG_CONFIG_PATH"
+  
+  ./configure \
+    --prefix=$INSTALL_DIR \
+    --disable-static \
+    --enable-shared \
+    --disable-openmp \
+    --without-magick-plus-plus \
+    --without-perl \
+    --without-x \
+    --disable-docs \
+    --enable-hdri=no \
+    --with-quantum-depth=8 \
+    --without-bzlib \
+    --without-lzma \
+    --without-wmf \
+    --without-xml \
+    --with-png=yes \
+    --with-jpeg=yes \
+    --with-tiff=yes \
+    --with-freetype=yes \
+    --with-fontconfig=yes | indent
+
+  echo "-----> Building ImageMagick (this may take a while)"
+  make -j$(nproc) | indent
+  make install | indent
+
+  # Download and install fonts
+  echo "-----> Downloading DejaVu fonts"
+  cd $BUILD_DIR
+  curl -L $DEJAVU_FONTS_URL -o $DEJAVU_FONTS_FILE | indent
+  
+  if [ ! -f $DEJAVU_FONTS_FILE ]; then
+    echo "Warning: Unable to download DejaVu fonts, continuing without them" | indent
+  else
+    echo "-----> Extracting fonts"
+    tar xjf $DEJAVU_FONTS_FILE | indent
+    
+    # Install fonts
+    echo "-----> Installing fonts"
+    mkdir -p $INSTALL_DIR/share/fonts/truetype/dejavu
+    cp $DEJAVU_FONTS_DIR/ttf/*.ttf $INSTALL_DIR/share/fonts/truetype/dejavu/ | indent
+  fi
+
+  # Create font configuration
+  echo "-----> Creating font configuration"
+  mkdir -p $INSTALL_DIR/etc/fonts
+  cat > $INSTALL_DIR/etc/fonts/fonts.conf <<EOF
+<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<fontconfig>
+  <dir>$INSTALL_DIR/share/fonts</dir>
+  <cachedir>$INSTALL_DIR/var/cache/fontconfig</cachedir>
+  
+  <!-- Default fonts -->
+  <alias>
+    <family>serif</family>
+    <prefer>
+      <family>DejaVu Serif</family>
+    </prefer>
+  </alias>
+  <alias>
+    <family>sans-serif</family>
+    <prefer>
+      <family>DejaVu Sans</family>
+    </prefer>
+  </alias>
+  <alias>
+    <family>monospace</family>
+    <prefer>
+      <family>DejaVu Sans Mono</family>
+    </prefer>
+  </alias>
+</fontconfig>
+EOF
+
+  # Create type.xml configuration for ImageMagick fonts
+  echo "-----> Creating ImageMagick type configuration"
+  mkdir -p $INSTALL_DIR/etc/ImageMagick-7
+  cat > $INSTALL_DIR/etc/ImageMagick-7/type.xml <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<typemap>
+  <type name="DejaVu-Sans" fullname="DejaVu Sans" family="DejaVu Sans" weight="400" style="normal" stretch="normal" format="truetype" glyphs="$INSTALL_DIR/share/fonts/truetype/dejavu/DejaVuSans.ttf"/>
+  <type name="DejaVu-Sans-Bold" fullname="DejaVu Sans Bold" family="DejaVu Sans" weight="700" style="normal" stretch="normal" format="truetype" glyphs="$INSTALL_DIR/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"/>
+  <type name="DejaVu-Sans-Oblique" fullname="DejaVu Sans Oblique" family="DejaVu Sans" weight="400" style="italic" stretch="normal" format="truetype" glyphs="$INSTALL_DIR/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf"/>
+  <type name="DejaVu-Serif" fullname="DejaVu Serif" family="DejaVu Serif" weight="400" style="normal" stretch="normal" format="truetype" glyphs="$INSTALL_DIR/share/fonts/truetype/dejavu/DejaVuSerif.ttf"/>
+  <type name="DejaVu-Sans-Mono" fullname="DejaVu Sans Mono" family="DejaVu Sans Mono" weight="400" style="normal" stretch="normal" format="truetype" glyphs="$INSTALL_DIR/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"/>
+</typemap>
+EOF
+
+  # Create policy.xml with secure defaults
+  echo "-----> Creating ImageMagick security policy"
+  cat > $INSTALL_DIR/etc/ImageMagick-7/policy.xml <<EOF
+<policymap>
+  <!-- Disable dangerous coders -->
+  <policy domain="coder" rights="none" pattern="EPHEMERAL" />
+  <policy domain="coder" rights="none" pattern="HTTPS" />
+  <policy domain="coder" rights="none" pattern="MVG" />
+  <policy domain="coder" rights="none" pattern="MSL" />
+  <policy domain="coder" rights="none" pattern="TEXT" />
+  <policy domain="coder" rights="none" pattern="SHOW" />
+  <policy domain="coder" rights="none" pattern="WIN" />
+  <policy domain="coder" rights="none" pattern="PLT" />
+  
+  <!-- Resource limits -->
+  <policy domain="resource" name="memory" value="256MiB"/>
+  <policy domain="resource" name="map" value="512MiB"/>
+  <policy domain="resource" name="width" value="16KP"/>
+  <policy domain="resource" name="height" value="16KP"/>
+  <policy domain="resource" name="area" value="128MP"/>
+  <policy domain="resource" name="disk" value="1GiB"/>
+  <policy domain="resource" name="file" value="768"/>
+  <policy domain="resource" name="thread" value="4"/>
+  <policy domain="resource" name="throttle" value="0"/>
+  <policy domain="resource" name="time" value="120"/>
+</policymap>
+EOF
+
+  # Clean up source files
+  cd $BUILD_DIR
+  rm -rf ImageMagick-$IMAGE_MAGICK_VERSION
+  rm -f $IMAGE_MAGICK_VERSION.tar.gz
+  rm -rf $DEJAVU_FONTS_DIR
+  rm -f $DEJAVU_FONTS_FILE
+
+  # Cache the installation
+  echo "-----> Caching ImageMagick installation"
+  cd $VENDOR_DIR
+  tar czf imagemagick-fonts.tar.gz imagemagick
+  mv imagemagick-fonts.tar.gz $CACHE_FILE
+
+else
+  # Extract from cache
+  echo "-----> Extracting ImageMagick from cache"
+  mkdir -p $VENDOR_DIR
+  tar xzf $CACHE_FILE -C $VENDOR_DIR
+fi
+
+# Update environment variables
+echo "-----> Setting up environment variables"
+PROFILE_PATH="$BUILD_DIR/.profile.d/imagemagick.sh"
+ACTUAL_INSTALL_PATH="$HOME/vendor/imagemagick"
+
+mkdir -p $(dirname $PROFILE_PATH)
+
+cat > $PROFILE_PATH <<EOF
+export PATH="$ACTUAL_INSTALL_PATH/bin:\$PATH"
+export LD_LIBRARY_PATH="$ACTUAL_INSTALL_PATH/lib:\$LD_LIBRARY_PATH"
+export MAGICK_CONFIGURE_PATH="$ACTUAL_INSTALL_PATH/etc/ImageMagick-7"
+export FONTCONFIG_PATH="$ACTUAL_INSTALL_PATH/etc/fonts"
+export FONTCONFIG_FILE="$ACTUAL_INSTALL_PATH/etc/fonts/fonts.conf"
+export MAGICK_FONT_PATH="$ACTUAL_INSTALL_PATH/share/fonts"
+export MAGICK_HOME="$ACTUAL_INSTALL_PATH"
+EOF
+
+echo "-----> ImageMagick installation complete!"
+echo "       Version: $IMAGE_MAGICK_VERSION" | indent
+echo "       Path: $ACTUAL_INSTALL_PATH" | indent
+echo "       Fonts: DejaVu font family installed" | indent
+
+# Test the installation
+if [ -f "$INSTALL_DIR/bin/magick" ]; then
+  echo "-----> Testing ImageMagick installation"
+  cd $BUILD_DIR
+  echo "       magick -version:" | indent
+  $INSTALL_DIR/bin/magick -version | head -3 | indent
+  
+  echo "       Available fonts:" | indent
+  $INSTALL_DIR/bin/magick -list font | grep -E "(Font:|family:)" | head -10 | indent || echo "       Font listing not available (normal for fresh install)" | indent
+else
+  echo "Warning: ImageMagick binary not found" | indent
+fi
+
+echo "-----> ImageMagick with fonts buildpack complete!"
