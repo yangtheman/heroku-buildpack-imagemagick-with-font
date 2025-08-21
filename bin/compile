@@ -219,6 +219,16 @@ echo "       Fonts: DejaVu font family installed" | indent
 if [ -f "$INSTALL_DIR/bin/magick" ]; then
   echo "-----> Testing ImageMagick installation"
   cd $BUILD_DIR
+  
+  # Set environment variables for testing
+  export PATH="$INSTALL_DIR/bin:$PATH"
+  export LD_LIBRARY_PATH="$INSTALL_DIR/lib:$LD_LIBRARY_PATH"
+  export MAGICK_CONFIGURE_PATH="$INSTALL_DIR/etc/ImageMagick-7"
+  export FONTCONFIG_PATH="$INSTALL_DIR/etc/fonts"
+  export FONTCONFIG_FILE="$INSTALL_DIR/etc/fonts/fonts.conf"
+  export MAGICK_FONT_PATH="$INSTALL_DIR/share/fonts"
+  export MAGICK_HOME="$INSTALL_DIR"
+  
   echo "       magick -version:" | indent
   $INSTALL_DIR/bin/magick -version | head -3 | indent
   
